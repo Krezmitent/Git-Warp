@@ -26,9 +26,13 @@
 //
 //   On branch switch:
 //     1. Hash the NEW lockfile → target_hash
-//     2. If node_modules is a real dir → stash it under the OLD hash
+//     2. If node_modules is a stale real dir → remove it (we can't
+//        cache it — we don't know the OLD lockfile's hash)
 //     3. If cache/{target_hash} exists → symlink node_modules → it
 //     4. If cache miss → warn user, they need one `npm install`
+//
+//   To populate the cache correctly, use `stash_after_install` after
+//   running `npm install` (lockfile and deps are known to match).
 //
 //   Result: branch switches are O(1) — a symlink swap, not an install.
 //
@@ -86,12 +90,13 @@ pub enum SwapResult {
         hash: String,
     },
 
-    /// node_modules was stashed into cache from a real directory.
-    /// This happens on first run when node_modules isn't a symlink yet.
-    Stashed {
+    /// A stale real node_modules directory was removed because we
+    /// cannot determine which lockfile it belonged to. The caller
+    /// should use `stash_after_install` after `npm install` to
+    /// populate the cache correctly.
+    #[allow(dead_code)] // Public API — reserved for future verbose swap reporting
+    StaleRemoved {
         hash: String,
-        #[allow(dead_code)] // Public API — used by future CLI consumers
-        cache_path: PathBuf,
     },
 }
 
@@ -104,7 +109,9 @@ impl std::fmt::Display for SwapResult {
             }
             Self::NoLockfile => write!(f, "no lockfile found"),
             Self::AlreadyCurrent { hash } => write!(f, "already current ({})", &hash[..16]),
-            Self::Stashed { hash, .. } => write!(f, "stashed to cache:{}", &hash[..16]),
+            Self::StaleRemoved { hash } => {
+                write!(f, "removed stale node_modules (hash:{})", &hash[..16])
+            }
         }
     }
 }
@@ -205,20 +212,23 @@ pub fn swap(repo_root: &Path, warp_home: &Path) -> Result<SwapResult> {
                 format!("Failed to remove symlink at {}", dep_dir.display())
             })?;
         } else {
-            // It's a real directory — stash it into the cache.
-            // First, figure out what lockfile hash it belongs to.
-            // We hash the CURRENT lockfile (before git checkout changed it,
-            // the content is already the new branch's version, but the
-            // node_modules was installed for the old one). Since we can't
-            // know the old lockfile, we generate a hash from the dep dir's
-            // own identity to avoid collisions.
-            let stash_result = stash_real_deps(&dep_dir, &cache_entry, &cached_deps, hash_short)?;
-            if stash_result {
-                return Ok(SwapResult::Stashed {
-                    hash: hash[..16].to_string(),
-                    cache_path: cache_entry,
-                });
-            }
+            // It's a real directory, but we can't cache it — we only
+            // know the NEW lockfile's hash, not the old one that these
+            // deps were installed from. Caching under the wrong key
+            // would poison the cache. Remove it and report back.
+            //
+            // Users should call `stash_after_install` right after
+            // `npm install` (when lockfile and deps are known to match)
+            // to populate the cache correctly.
+            tracing::warn!(
+                dep_dir = %dep_dir.display(),
+                "Removing stale real node_modules (cannot determine original lockfile hash)"
+            );
+            fs::remove_dir_all(&dep_dir).with_context(|| {
+                format!("Failed to remove stale node_modules at {}", dep_dir.display())
+            })?;
+            // Don't return early — fall through to Step 5 to attempt
+            // a cache hit for the new lockfile's hash.
         }
     }
 
@@ -369,66 +379,6 @@ fn is_symlink_to(path: &Path, target: &Path) -> bool {
         Ok(link_target) => link_target == target,
         Err(_) => false,
     }
-}
-
-/// Stash a real node_modules directory into the cache.
-///
-/// If the target cache entry already exists, we just delete the
-/// real directory (the cache version is canonical).
-///
-/// Returns true if the stash consumed the operation (caller should
-/// return Stashed), false if the caller should continue to the
-/// symlink step.
-fn stash_real_deps(
-    dep_dir: &Path,
-    cache_entry: &Path,
-    cached_deps: &Path,
-    hash_short: &str,
-) -> Result<bool> {
-    if cached_deps.is_dir() {
-        // Cache already has an entry for this hash — the real dir
-        // is redundant. Remove it so we can create the symlink.
-        tracing::info!(
-            hash = hash_short,
-            "Cache entry exists — removing redundant real node_modules"
-        );
-        fs::remove_dir_all(dep_dir).with_context(|| {
-            format!("Failed to remove {}", dep_dir.display())
-        })?;
-        return Ok(false);
-    }
-
-    // Move the real dir into cache
-    tracing::info!(
-        hash = hash_short,
-        from = %dep_dir.display(),
-        to = %cached_deps.display(),
-        "Stashing real node_modules into cache"
-    );
-
-    fs::create_dir_all(cache_entry)?;
-    fs::rename(dep_dir, cached_deps).with_context(|| {
-        format!(
-            "Failed to move {} → {} (are they on different filesystems?)",
-            dep_dir.display(),
-            cached_deps.display()
-        )
-    })?;
-
-    // Write metadata for GC and debugging
-    write_cache_metadata(cache_entry, hash_short, "auto-stashed")?;
-    touch_last_used(cache_entry)?;
-
-    // Now create symlink so the swap is complete
-    unix_fs::symlink(cached_deps, dep_dir).with_context(|| {
-        format!(
-            "Failed to create symlink {} → {}",
-            dep_dir.display(),
-            cached_deps.display()
-        )
-    })?;
-
-    Ok(true)
 }
 
 /// Write metadata files into a cache entry for debugging and GC.
@@ -597,22 +547,22 @@ mod tests {
     }
 
     #[test]
-    fn swap_stashes_real_dir() {
+    fn swap_removes_stale_real_dir_then_cache_miss() {
         let repo = setup_repo("package-lock.json", "{\"version\": 1}");
         let warp = setup_warp_home();
 
-        // Create a real node_modules
+        // Create a real node_modules (installed for an unknown lockfile)
         let nm = repo.path().join("node_modules");
         fs::create_dir(&nm).unwrap();
         fs::write(nm.join("marker.txt"), "hello").unwrap();
 
+        // swap() can't know what lockfile these deps belong to,
+        // so it removes the stale dir and reports a cache miss.
         let result = swap(repo.path(), warp.path()).unwrap();
-        assert!(matches!(result, SwapResult::Stashed { .. }));
+        assert!(matches!(result, SwapResult::CacheMiss { .. }));
 
-        // node_modules should now be a symlink
-        assert!(is_symlink(&nm));
-        // The marker file should be accessible through the symlink
-        assert_eq!(fs::read_to_string(nm.join("marker.txt")).unwrap(), "hello");
+        // node_modules should have been removed
+        assert!(!nm.exists());
     }
 
     #[test]
@@ -620,11 +570,12 @@ mod tests {
         let repo = setup_repo("package-lock.json", "{\"version\": 1}");
         let warp = setup_warp_home();
 
-        // Create real node_modules → stash it
+        // Use stash_after_install to correctly populate the cache,
+        // then swap to create the symlink.
         let nm = repo.path().join("node_modules");
         fs::create_dir(&nm).unwrap();
         fs::write(nm.join("marker.txt"), "hello").unwrap();
-        let _ = swap(repo.path(), warp.path()).unwrap();
+        stash_after_install(repo.path(), warp.path()).unwrap();
 
         // Second swap should detect it's already current
         let result = swap(repo.path(), warp.path()).unwrap();
@@ -636,12 +587,11 @@ mod tests {
         let repo = setup_repo("package-lock.json", "{\"version\": 1}");
         let warp = setup_warp_home();
 
-        // Create and stash node_modules for version 1
+        // Correctly populate cache for v1 via stash_after_install
         let nm = repo.path().join("node_modules");
         fs::create_dir(&nm).unwrap();
         fs::write(nm.join("version.txt"), "v1").unwrap();
-        let r1 = swap(repo.path(), warp.path()).unwrap();
-        assert!(matches!(r1, SwapResult::Stashed { .. }));
+        stash_after_install(repo.path(), warp.path()).unwrap();
 
         // Change lockfile to version 2
         fs::write(repo.path().join("package-lock.json"), "{\"version\": 2}").unwrap();
