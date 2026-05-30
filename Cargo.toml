@@ -1,0 +1,43 @@
+[package]
+name = "git-warp"
+version = "0.1.0"
+edition = "2021"
+description = "An Environment Time Machine — O(1) branch-aware dependency and database volume switching for local dev."
+license = "MIT"
+authors = ["git-warp contributors"]
+
+# ──────────────────────────────────────────────────────────────────────
+# DEPENDENCY RATIONALE
+# ──────────────────────────────────────────────────────────────────────
+# tokio          — Async runtime. We need it for the daemon event loop,
+#                  spawning the GC timer, and non-blocking command execution.
+# clap + derive  — Zero-boilerplate CLI with subcommands.
+# notify         — Cross-platform file watcher. On Linux/WSL2 it uses
+#                  inotify under the hood — no polling.
+# serde + yaml   — Parse and rewrite docker-compose.yml volumes.
+# sha2           — SHA-256 hashing of lockfiles for cache addressing.
+# hex            — Encode hash digests as hex strings for directory names.
+# tracing        — Structured, async-aware logging for the daemon.
+# tracing-sub    — Subscriber that writes logs to file + stdout.
+# dirs           — Resolves ~/.git-warp portably across Unix variants.
+# anyhow         — Ergonomic error handling with context chains.
+# chrono         — Timestamp comparisons for the GC's LRU eviction.
+# ──────────────────────────────────────────────────────────────────────
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive", "env"] }
+notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
+dirs = "5"
+anyhow = "1"
+chrono = { version = "0.4", features = ["clock"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,31 @@
+# Build artifacts
+/target/
+debug/
+release/
+
+# Cargo lock is committed for binaries (recommended by Cargo docs)
+# Cargo.lock
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Environment
+.env
+.env.local
+
+# Testing artifacts
+*.profraw
+lcov.info
+coverage/
+
+# git-warp runtime files (these are generated, not source)
+daemon.log
