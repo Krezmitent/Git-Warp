@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-05-30
+
+### Fixed
+
+- **Clippy Config** — Removed invalid `[workspace]` section from `clippy.toml` that broke CI.
+- **License Metadata** — Corrected `Cargo.toml` license field from `MIT` to `GPL-3.0-or-later` to match the actual LICENSE file.
+- **Contributing Docs** — Fixed clone URL placeholder in `CONTRIBUTING.md` to point to the real repository.
+
+### Added
+
+- **Repository URL** — Added `repository` field to `Cargo.toml` for crates.io discoverability.
+
 ## [0.1.0] - 2025-05-30
 
 ### Added

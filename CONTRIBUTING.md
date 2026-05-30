@@ -13,7 +13,7 @@ Thanks for your interest in contributing! Here's how to get started.
 ### Clone & Build
 
 ```bash
-git clone https://github.com/<your-username>/git-warp.git
+git clone https://github.com/Krezmitent/Git-Warp.git
 cd git-warp
 cargo build
 ```
