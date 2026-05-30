@@ -26,16 +26,18 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::OnceLock;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Leaked guard reference.
+/// Process-lifetime guard for the non-blocking log writer.
 ///
 /// `tracing-appender`'s `NonBlocking` writer spawns a background thread
 /// and returns a `WorkerGuard`. If the guard is dropped, buffered logs
-/// are lost. We intentionally leak it so the guard lives for the entire
-/// process lifetime. This is standard practice for long-running daemons.
-static mut _LOG_GUARD: Option<WorkerGuard> = None;
+/// are lost. We store it in a `OnceLock` so the guard lives for the
+/// entire process lifetime. `OnceLock::set` is a no-op on subsequent
+/// calls, preventing an accidental double-init from dropping the guard.
+static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 /// Initialize the global tracing subscriber.
 ///
@@ -46,11 +48,9 @@ pub fn init(warp_home: &Path) -> Result<()> {
     let file_appender = tracing_appender::rolling::daily(&log_dir, "daemon.log");
     let (non_blocking_writer, guard) = tracing_appender::non_blocking(file_appender);
 
-    // SAFETY: We're in single-threaded init before tokio spawns workers.
-    // The guard is leaked intentionally — see doc comment above.
-    unsafe {
-        _LOG_GUARD = Some(guard);
-    }
+    // Store the guard for the process lifetime; ignore the result if
+    // already initialised (e.g. a second call from tests).
+    let _ = LOG_GUARD.set(guard);
 
     let file_layer = fmt::layer()
         .json()

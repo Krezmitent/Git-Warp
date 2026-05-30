@@ -76,7 +76,7 @@ Multiply by **20+ branch switches per day** across a team, and you're burning ho
 ### Build from Source
 
 ```bash
-git clone https://github.com/<your-username>/git-warp.git
+git clone https://github.com/Krezmitent/Git-Warp.git
 cd git-warp
 cargo build --release
 
